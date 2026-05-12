@@ -34,7 +34,6 @@ jobs:
         run: python main.py
         env:
           PINCODE: '700110'
-          PYTHONPATH: '__ROOT__'
 
       - name: Upload artifacts
         if: always()
