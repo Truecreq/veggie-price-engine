@@ -1,0 +1,7 @@
+venv/
+output/
+scrapper/blinkit/session.json
+scrapper/bigbasket/session.json
+__pycache__/
+*.pyc
+*.png

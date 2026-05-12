@@ -1,0 +1,38 @@
+name: Daily Veggie Price Scraper
+
+on:
+  schedule:
+    - cron: '30 0 * * *'   # 6:00 AM IST = 00:30 UTC
+  workflow_dispatch:        # manual trigger from GitHub UI
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          playwright install chromium
+          playwright install-deps chromium
+
+      - name: Run scrapers
+        env:
+          PINCODE: "201206"
+        run: python main.py
+
+      - name: Upload output artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: veggie-prices-${{ github.run_number }}
+          path: output/
+          retention-days: 90
