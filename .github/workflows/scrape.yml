@@ -1,9 +1,9 @@
 name: Daily Veggie Price Scraper
 
 on:
-  workflow_dispatch:        # manual trigger from GitHub UI
+  workflow_dispatch:
   schedule:
-    - cron: '30 0 * * *'   # 6:00 AM IST = 00:30 UTC
+    - cron: '30 0 * * *'
 
 jobs:
   scrape:
@@ -14,14 +14,16 @@ jobs:
       - name: Checkout repo
         uses: actions/checkout@v4
 
-      - name: Set up Python
+      - name: Set up Python 3.11
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
-      - name: Install dependencies
+      - name: Install Python dependencies
+        run: pip install -r requirements.txt
+
+      - name: Install Playwright Chromium
         run: |
-          pip install -r requirements.txt
           playwright install chromium
           playwright install-deps chromium
 
@@ -29,12 +31,12 @@ jobs:
         run: mkdir -p output
 
       - name: Run scrapers
-        env:
-          PINCODE: "201206"
-          PYTHONPATH: ${{ github.workspace }}
         run: python main.py
+        env:
+          PINCODE: '700110'
+          PYTHONPATH: '__ROOT__'
 
-      - name: Upload output artifacts
+      - name: Upload artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:

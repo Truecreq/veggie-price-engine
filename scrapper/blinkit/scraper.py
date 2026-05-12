@@ -18,9 +18,12 @@ WAIT_NAV         = 6000
 SCROLL_STEP_PX   = 400
 SCROLL_PAUSE_MS  = 800
 SCROLL_MAX_STEPS = 200
-
 BLOCK_RESOURCES  = {"image", "media", "font"}
 ROOT_DIR         = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../"))
+
+# Kolkata coords for pincode 700110
+GEO_LAT = 22.5726
+GEO_LON = 88.3639
 
 
 def clean(v):
@@ -32,7 +35,7 @@ def fmt_price(val):
         return ""
     try:
         v = float(val)
-        return f"\u20b9{int(v)}" if v == int(v) else f"\u20b9{v}"
+        return f"Rs.{int(v)}" if v == int(v) else f"Rs.{v}"
     except Exception:
         return str(val)
 
@@ -47,16 +50,16 @@ def extract_location_cookies(context):
 
 
 def set_location(page, context, pincode):
-    print("[LOC] Opening Blinkit category page...")
+    print("[LOC] Opening Blinkit...")
     page.goto(CATEGORY_URL, wait_until="networkidle", timeout=90000)
     page.wait_for_timeout(WAIT_GOTO)
-    print(f"[LOC] Page title: {page.title()}")
+    print(f"[LOC] Title: {page.title()}")
 
     try:
         page.locator(f"xpath={LOCATION_TRIGGER_XPATH}").click(timeout=15000)
         print("[LOC] Location trigger clicked!")
     except Exception as e:
-        print(f"[LOC] XPATH click failed: {e}")
+        print(f"[LOC] Trigger failed: {e}")
         page.screenshot(path=os.path.join(ROOT_DIR, "debug_bl_location.png"))
     page.wait_for_timeout(WAIT_TRIGGER)
 
@@ -143,7 +146,6 @@ def parse_api_response(body_text, pincode, collected):
         data = json.loads(body_text)
     except Exception:
         return
-
     added = 0
 
     def build_quantity(obj):
@@ -151,8 +153,7 @@ def parse_api_response(body_text, pincode, collected):
             if isinstance(obj.get(key), str) and obj[key].strip():
                 return clean(obj[key])
         qty_val = obj.get("quantity") or obj.get("qty") or obj.get("default_qty") or 1
-        unit = (obj.get("unit") or obj.get("uom") or
-                obj.get("unit_type") or obj.get("unit_name") or "")
+        unit = obj.get("unit") or obj.get("uom") or obj.get("unit_type") or obj.get("unit_name") or ""
         try:
             f = float(qty_val)
             qty_val = int(f) if f == int(f) else f
@@ -165,30 +166,24 @@ def parse_api_response(body_text, pincode, collected):
         price_block = obj.get("price")
         sale = mrp = None
         if isinstance(price_block, dict):
-            sale = (price_block.get("value") or price_block.get("sale_price")
-                    or price_block.get("offer_price"))
-            mrp  = (price_block.get("mrp") or price_block.get("mrp_value")
-                    or price_block.get("list_price"))
+            sale = price_block.get("value") or price_block.get("sale_price") or price_block.get("offer_price")
+            mrp  = price_block.get("mrp") or price_block.get("mrp_value") or price_block.get("list_price")
         if sale is None:
-            sale = (obj.get("sale_price") or obj.get("offer_price")
-                    or obj.get("price") or obj.get("sp"))
+            sale = obj.get("sale_price") or obj.get("offer_price") or obj.get("price") or obj.get("sp")
         if mrp is None:
             mrp = obj.get("mrp") or obj.get("market_price") or sale
         return sale, mrp
 
     def get_name(obj):
-        return (obj.get("name") or obj.get("product_name") or obj.get("title")
-                or obj.get("display_name") or obj.get("item_name"))
+        return obj.get("name") or obj.get("product_name") or obj.get("title") or obj.get("display_name") or obj.get("item_name")
 
     def get_id(obj):
-        return (obj.get("product_id") or obj.get("id")
-                or obj.get("item_id") or obj.get("sku_id"))
+        return obj.get("product_id") or obj.get("id") or obj.get("item_id") or obj.get("sku_id")
 
     def walk(obj):
         nonlocal added
         if isinstance(obj, list):
-            for item in obj:
-                walk(item)
+            for item in obj: walk(item)
             return
         if not isinstance(obj, dict):
             return
@@ -205,11 +200,8 @@ def parse_api_response(body_text, pincode, collected):
                 key     = ("id", str(pid)) if pid else ("nk", name.lower(), qty_str.lower())
                 if key not in collected and name:
                     collected[key] = {
-                        "Pincode":      pincode,
-                        "Product Name": name,
-                        "Quantity":     qty_str,
-                        "Sale Price":   sale,
-                        "MRP":          mrp,
+                        "Pincode": pincode, "Product Name": name,
+                        "Quantity": qty_str, "Sale Price": sale, "MRP": mrp,
                     }
                     added += 1
         if isinstance(obj.get("product"), dict):
@@ -227,53 +219,46 @@ def scroll_inner_container(page, collected):
     try:
         container = page.locator(f"xpath={INNER_SCROLL_XPATH}")
         container.wait_for(timeout=15000, state="visible")
-        print("[SCROLL] Inner container found, scrolling...")
+        print("[SCROLL] Inner container found.")
     except Exception:
-        print("[SCROLL] Inner container not found — falling back to PageDown")
+        print("[SCROLL] Falling back to PageDown")
         _fallback_scroll(page, collected)
         return
 
     container.evaluate("el => { el.scrollTop = 0; }")
     page.wait_for_timeout(800)
-
     prev_len = 0
     stagnant = 0
-
     for i in range(1, SCROLL_MAX_STEPS + 1):
         container.evaluate("(el, step) => { el.scrollTop += step; }", SCROLL_STEP_PX)
         page.wait_for_timeout(SCROLL_PAUSE_MS)
-        inner_top = container.evaluate("el => el.scrollTop")
-        cur_len   = len(collected)
-        print(f"  [SCROLL] step {i:03d} | scrollTop:{inner_top} | products:{cur_len}")
-        stagnant  = stagnant + 1 if cur_len == prev_len else 0
-        if cur_len != prev_len:
-            prev_len = cur_len
+        cur_len  = len(collected)
+        print(f"  [SCROLL] step {i:03d} | products:{cur_len}")
+        stagnant = stagnant + 1 if cur_len == prev_len else 0
+        if cur_len != prev_len: prev_len = cur_len
         if stagnant >= 15:
-            print("  [SCROLL] ✅ Bottom confirmed.")
+            print("  [SCROLL] Bottom confirmed.")
             break
 
 
 def _fallback_scroll(page, collected):
     prev_len = 0
     stagnant = 0
-    for i in range(1, 120 + 1):
+    for i in range(120):
         page.keyboard.press("PageDown")
         page.wait_for_timeout(SCROLL_PAUSE_MS)
         cur_len  = len(collected)
         stagnant = stagnant + 1 if cur_len == prev_len else 0
-        if cur_len != prev_len:
-            prev_len = cur_len
-        if stagnant >= 15:
-            break
+        if cur_len != prev_len: prev_len = cur_len
+        if stagnant >= 15: break
 
 
 def scrape_blinkit(pincode):
     collected = {}
-    print(f"\n[START] Blinkit scraper | pincode={pincode}")
+    print(f"\n[START] Blinkit | pincode={pincode}")
 
     def on_response(response):
-        url = response.url
-        if "blinkit.com" not in url and "grofers.com" not in url:
+        if "blinkit.com" not in response.url and "grofers.com" not in response.url:
             return
         if "json" not in response.headers.get("content-type", ""):
             return
@@ -285,74 +270,51 @@ def scrape_blinkit(pincode):
             pass
 
     with sync_playwright() as p:
-        print("[BROWSER] Launching headless Chromium...")
+        print("[BROWSER] Launching...")
         browser = p.chromium.launch(
             headless=True,
-            args=[
-                "--disable-blink-features=AutomationControlled",
-                "--disable-extensions",
-                "--no-sandbox",
-                "--disable-dev-shm-usage",
-                "--disable-gpu",
-                "--window-size=1400,900",
-            ]
+            args=["--disable-blink-features=AutomationControlled", "--no-sandbox",
+                  "--disable-dev-shm-usage", "--disable-gpu", "--window-size=1400,900"]
         )
-        print("[BROWSER] ✅ Launched!")
-
         context = browser.new_context(
-            user_agent=(
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/124.0.0.0 Safari/537.36"
-            ),
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
             viewport={"width": 1400, "height": 900},
             locale="en-IN",
             timezone_id="Asia/Kolkata",
-            geolocation={"latitude": 28.8386, "longitude": 77.5011},
+            geolocation={"latitude": GEO_LAT, "longitude": GEO_LON},
             permissions=["geolocation"],
         )
         page = context.new_page()
-        page.add_init_script(
-            "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
-        )
+        page.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
         page.on("response", on_response)
-        page.route(
-            "**/*",
-            lambda route: route.abort()
-            if route.request.resource_type in BLOCK_RESOURCES
-            else route.continue_()
-        )
+        page.route("**/*", lambda route: route.abort()
+            if route.request.resource_type in BLOCK_RESOURCES else route.continue_())
 
         session_file = os.path.join(os.path.dirname(__file__), "session.json")
         if os.path.exists(session_file):
-            print("[SES] Found existing session — restoring...")
+            print("[SES] Restoring session...")
             with open(session_file) as f:
                 session = json.load(f)
             restore_session(page, context, session, pincode)
         else:
-            print("[SES] No session found — setting location fresh...")
+            print("[SES] Fresh location set...")
             session = set_location(page, context, pincode)
             restore_session(page, context, session, pincode)
 
-        print(f"\n[NAV] {CATEGORY_URL}")
         page.goto(CATEGORY_URL, wait_until="networkidle", timeout=90000)
         page.wait_for_timeout(WAIT_NAV)
-        print(f"[NAV] Page title: {page.title()}")
-        print(f"  [API] After load: {len(collected)} products")
+        print(f"[NAV] Title: {page.title()} | products so far: {len(collected)}")
 
         try:
             page.wait_for_selector("div[class*='product' i], a[href*='prd']", timeout=15000)
-            print("[NAV] ✅ Products visible.")
+            print("[NAV] Products visible.")
         except Exception:
-            print("[NAV] ⚠️  Products not detected — taking screenshot...")
             page.screenshot(path=os.path.join(ROOT_DIR, "debug_bl_products.png"))
 
         scroll_inner_container(page, collected)
-
-        print(f"\n[DONE] Total unique products: {len(collected)}")
         browser.close()
-        print("[BROWSER] Closed.")
 
+    print(f"[DONE] Blinkit total: {len(collected)}")
     return list(collected.values())
 
 

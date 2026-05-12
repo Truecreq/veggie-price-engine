@@ -15,22 +15,26 @@ QTY_RE          = re.compile(r'\d+(\.\d+)?\s*(kg|g|gm|ml|ltr|l|pcs|pc|pack|nos|p
 BLOCK_RESOURCES = {"image", "media", "font", "stylesheet", "other"}
 ROOT_DIR        = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../"))
 
+# Kolkata coords for pincode 700110
+GEO_LAT = 22.5726
+GEO_LON = 88.3639
+
 
 def clean(v):
     return " ".join(str(v).split()).strip() if v else ""
 
 
 def set_location(page, context, pincode):
-    print("[LOC] Loading BigBasket homepage...")
+    print("[LOC] Loading BigBasket...")
     page.goto("https://www.bigbasket.com/", wait_until="domcontentloaded", timeout=60000)
     page.wait_for_timeout(3000)
-    print(f"[LOC] Page title: {page.title()}")
+    print(f"[LOC] Title: {page.title()}")
 
     try:
         page.locator(f"xpath={LOCATION_BUTTON_XPATH}").click(timeout=15000)
         print("[LOC] Location button clicked!")
     except Exception as e:
-        print(f"[LOC] XPATH click failed: {e}")
+        print(f"[LOC] XPATH failed: {e}")
         try:
             page.get_by_text("Select your location").click(timeout=8000)
         except Exception:
@@ -50,23 +54,23 @@ def set_location(page, context, pincode):
             loc = page.locator(sel).first if not sel.startswith("xpath=") else page.locator(sel)
             loc.wait_for(timeout=6000, state="visible")
             inp = loc
-            print(f"[LOC] Input found via: {sel}")
+            print(f"[LOC] Input: {sel}")
             break
         except Exception:
             continue
 
     if inp is None:
         page.screenshot(path=os.path.join(ROOT_DIR, "debug_bb_location.png"))
-        raise RuntimeError("Pincode input not found on BigBasket")
+        raise RuntimeError("Pincode input not found")
 
     inp.click(force=True)
     inp.fill(str(pincode))
-    print(f"[LOC] Pincode filled: {pincode}")
+    print(f"[LOC] Filled: {pincode}")
     page.wait_for_timeout(2500)
 
     try:
         page.locator(f"xpath={FIRST_LOCATION_XPATH}").click(timeout=8000)
-        print("[LOC] First suggestion clicked!")
+        print("[LOC] Suggestion clicked!")
     except Exception:
         try:
             page.locator("ul li").first.click(timeout=5000)
@@ -82,7 +86,7 @@ def set_location(page, context, pincode):
     session_path = os.path.join(os.path.dirname(__file__), "session.json")
     with open(session_path, "w") as f:
         json.dump(session, f)
-    print(f"[LOC] Session saved — {len(cookies)} cookies")
+    print(f"[LOC] Session saved -- {len(cookies)} cookies")
     return session
 
 
@@ -90,7 +94,7 @@ def restore_session(page, context, session, pincode):
     try:
         context.add_cookies(session["cookies"])
     except Exception as e:
-        print(f"[SES] Cookie restore warning: {e}")
+        print(f"[SES] Warning: {e}")
     context.add_cookies([
         {"name": "bb_pincode",   "value": str(pincode), "domain": ".bigbasket.com", "path": "/"},
         {"name": "pincode",      "value": str(pincode), "domain": ".bigbasket.com", "path": "/"},
@@ -116,7 +120,6 @@ def is_error_page(page):
         pass
     c = page.content().lower()
     if "something went wrong" in c or "no products found" in c or "page not found" in c:
-        print("[STOP] Error text detected.")
         return True
     return False
 
@@ -125,106 +128,75 @@ def extract_page(source, pincode, page_num):
     parser = html.fromstring(source)
     listings = (
         parser.xpath("//section/section/ul/li") or
-        parser.xpath("//ul/li[.//h3]")           or
-        parser.xpath("//li[.//h3]")               or
+        parser.xpath("//ul/li[.//h3]") or
+        parser.xpath("//li[.//h3]") or
         parser.xpath("//div[contains(@class,'SKUDeck')]") or
         parser.xpath("//div[contains(@class,'product')]")
     )
-    print(f"  [PARSE] Page {page_num} — {len(listings)} blocks found")
-
+    print(f"  [PARSE] Page {page_num} -- {len(listings)} blocks")
     products, skipped = [], 0
     for item in listings:
         all_text = [clean(t) for t in item.xpath(".//text()") if clean(t)]
         full     = " ".join(all_text).lower()
-
         if "out of stock" in full or "notify me" in full:
             skipped += 1
             continue
-
         raw_name = item.xpath('.//h3/text()')
         name     = clean(raw_name[0]) if raw_name else ""
         if not name:
             continue
-
-        raw_qty = item.xpath(
-            './/span[contains(@class,"PackSelector")]/span/text() | '
-            './/div[contains(@aria-haspopup,"listbox")]//span/text()'
-        )
+        raw_qty  = item.xpath('.//span[contains(@class,"PackSelector")]/span/text() | .//div[contains(@aria-haspopup,"listbox")]//span/text()')
         quantity = clean(raw_qty[0]) if raw_qty else ""
         if not quantity:
             for t in all_text:
-                if QTY_RE.search(t) and "\u20b9" not in t and "OFF" not in t:
+                if QTY_RE.search(t) and "Rs." not in t and "OFF" not in t:
                     quantity = t
                     break
-
-        raw_price = item.xpath('.//span[contains(text(),"\u20b9")]/text()')
+        raw_price = item.xpath('.//span[contains(text(),"Rs.")]/text() | .//span[contains(text(),"\u20b9")]/text()')
         prices    = [clean(p) for p in raw_price if clean(p) and "OFF" not in clean(p)]
         if not prices:
             skipped += 1
             continue
-
         products.append({
-            "Pincode":      pincode,
-            "Product Name": name,
-            "Quantity":     quantity,
-            "Sale Price":   prices[0],
-            "MRP":          prices[1] if len(prices) > 1 else prices[0],
+            "Pincode": pincode, "Product Name": name, "Quantity": quantity,
+            "Sale Price": prices[0], "MRP": prices[1] if len(prices) > 1 else prices[0],
         })
-
     print(f"  [PARSE] skipped:{skipped} in-stock:{len(products)}")
     return products
 
 
 def scrape_bigbasket(pincode):
     all_products = []
-    print(f"\n[START] BigBasket scraper | pincode={pincode}")
+    print(f"\n[START] BigBasket | pincode={pincode}")
 
     with sync_playwright() as p:
-        print("[BROWSER] Launching headless Chromium...")
+        print("[BROWSER] Launching...")
         browser = p.chromium.launch(
             headless=True,
-            args=[
-                "--disable-blink-features=AutomationControlled",
-                "--disable-extensions",
-                "--no-sandbox",
-                "--disable-dev-shm-usage",
-                "--disable-gpu",
-                "--window-size=1400,900",
-            ]
+            args=["--disable-blink-features=AutomationControlled", "--no-sandbox",
+                  "--disable-dev-shm-usage", "--disable-gpu", "--window-size=1400,900"]
         )
-        print("[BROWSER] ✅ Launched!")
-
         context = browser.new_context(
-            user_agent=(
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/124.0.0.0 Safari/537.36"
-            ),
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
             viewport={"width": 1400, "height": 900},
             locale="en-IN",
             timezone_id="Asia/Kolkata",
-            geolocation={"latitude": 28.8386, "longitude": 77.5011},
+            geolocation={"latitude": GEO_LAT, "longitude": GEO_LON},
             permissions=["geolocation"],
         )
         page = context.new_page()
-        page.add_init_script(
-            "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
-        )
-        page.route(
-            "**/*",
-            lambda route: route.abort()
-            if route.request.resource_type in BLOCK_RESOURCES
-            else route.continue_()
-        )
+        page.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
+        page.route("**/*", lambda route: route.abort()
+            if route.request.resource_type in BLOCK_RESOURCES else route.continue_())
 
         session_file = os.path.join(os.path.dirname(__file__), "session.json")
         if os.path.exists(session_file):
-            print("[SES] Found existing session — restoring...")
+            print("[SES] Restoring session...")
             with open(session_file) as f:
                 session = json.load(f)
             restore_session(page, context, session, pincode)
         else:
-            print("[SES] No session — setting location fresh...")
+            print("[SES] Fresh location set...")
             session = set_location(page, context, pincode)
             restore_session(page, context, session, pincode)
 
@@ -235,27 +207,23 @@ def scrape_bigbasket(pincode):
             try:
                 page.goto(url, wait_until="domcontentloaded", timeout=60000)
             except Exception as e:
-                print(f"[NAV] ❌ Navigation failed: {e}")
+                print(f"[NAV] Failed: {e}")
                 break
             page.wait_for_timeout(2000)
             print(f"[NAV] Title: {page.title()}")
-
             if is_error_page(page):
                 break
-
             products = extract_page(page.content(), pincode, page_num)
             if not products:
-                page.screenshot(path=os.path.join(ROOT_DIR, f"debug_bb_page{page_num}.png"))
+                page.screenshot(path=os.path.join(ROOT_DIR, f"debug_bb_p{page_num}.png"))
                 break
-
             all_products.extend(products)
             print(f"[TOTAL] {len(all_products)}")
             page_num += 1
 
         browser.close()
-        print("[BROWSER] Closed.")
 
-    print(f"\n[DONE] Total products: {len(all_products)}")
+    print(f"[DONE] BigBasket total: {len(all_products)}")
     return all_products
 
 
