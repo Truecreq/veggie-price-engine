@@ -25,14 +25,20 @@ jobs:
           playwright install chromium
           playwright install-deps chromium
 
+      - name: Create output directory
+        run: mkdir -p output
+
       - name: Run scrapers
         env:
           PINCODE: "201206"
+          PYTHONPATH: ${{ github.workspace }}
         run: python main.py
 
       - name: Upload output artifacts
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: veggie-prices-${{ github.run_number }}
           path: output/
           retention-days: 90
+          if-no-files-found: warn
